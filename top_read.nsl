@@ -1,0 +1,36 @@
+#include "read.inc"
+declare top_read{
+    input rxd;
+    output HEX0[8],HEX1[8];
+}
+module top_read{
+    read read_x;
+    reg set_sw=1'b0;
+    reg set_sw_end=1'b0;
+    mem encode[16][8]={0b00111111,0b00000110,
+	0b01011011,0b01001111,
+	0b01100110,0b01101101,
+	0b01111101,0b00100111,
+	0b01111111,0b01101111,
+    0b01110111,0b01111100,
+	0b00111001,0b01011110,
+	0b01111001,0b01110001};
+    reg count[32]=32'b0;
+    mem read_data[16][8]={8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0,8'b0};
+    reg count_time=32'b0;
+    HEX0=~encode[read_data[0][7:4]];
+    HEX1=~encode[read_data[0][3:0]];
+    read_x.Rx_BitLength_i=0b11;
+    read_x.Rx_ParityEN_i=0b0;
+   
+
+    read_x.RxD_i =rxd;
+    func read_x.RxD_Ready_o{
+        read_data[count]:=read_x.Rx_Data_o;
+        set_sw_end:=0b1;
+        count:=0b1;
+    }
+        
+    
+    read_x.Rx_Enable_i=0b1;
+}

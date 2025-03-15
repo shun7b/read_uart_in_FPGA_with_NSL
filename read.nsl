@@ -1,0 +1,204 @@
+
+
+/*
+
+    Input clock frequency is expected to 50.000MHz.
+
+*/
+
+#include "read.inc"
+
+module read {
+/* ************************************************************ */
+
+/* Declare internal signals */
+    wire        BitLength[4] ;
+
+    reg         ShiftCount[4] = 0 ;
+
+    reg         x16_BaudCounter[16] = 0;
+    reg         x16_ShiftTiming = FALSE ;
+    reg         x1_BaudCounter[4] = 0 ;
+    reg         x1_ShiftTiming = FALSE ;
+
+    reg         Rx_ShiftReg[12] = 0 ;           // Parallel -> Serial conversion shift register.
+    reg         internal_RxD_in[3] = 3'b000 ;
+    wire        Rx_Data[8] ;
+
+    wire        Rx_Parity ;                     // Parity check node.
+
+    reg         Detect_StartBit = 0 ;
+    func_name   Receive_Start ;
+
+/* ************************************************************ */
+// Procedure description
+//      Declare function and procedure 
+
+    proc_name   shift_Operation( x1_ShiftTiming, internal_RxD_in ) ,    //
+                data_check() ,                              // Parity check &#038; Framing error check
+                access_complete() ;                         //
+
+{
+/* ************************************************************ */
+/* Baud rate generator */
+//   This function is activate at Rx_Enable_i will be HIGH.
+    if ( Rx_Enable_i ) {
+        if ( x16_BaudCounter == 16'd50 ) {
+            x16_BaudCounter := 16'h0 ;                      // Reset baud rate counter
+            x16_ShiftTiming := TRUE ;                       //  and assert Shift Timing indicator.
+        } else {
+            x16_BaudCounter := x16_BaudCounter + 16'h1 ;    // Count up
+            x16_ShiftTiming := FALSE ;                      // Reset Shift Timing indicator.
+        }
+   } else {
+        x16_BaudCounter := 16'h0 ;                          // Reset baud rate counter
+        x16_ShiftTiming := FALSE ;                          // Reset Shift Timing indicator.
+    }
+
+/* ************************************************************ */
+/* Shift timing generation */
+//   Synchronous INPUT signal and detect center point of START bit.
+    // Clock synchronize and double latch
+    internal_RxD_in  := { internal_RxD_in[1:0] , RxD_i } ;
+    if ( x16_ShiftTiming ) {
+                if ( ( internal_RxD_in[0] == 1'b0 ) && ~Detect_StartBit ) {   // All L level ?
+            Receive_Start() ;                           // Detect start bit and operation start.
+            Detect_StartBit := TRUE ;
+        }
+    }
+
+    if ( Detect_StartBit ) {
+        if ( x16_ShiftTiming ) {
+            x1_BaudCounter := x1_BaudCounter + 4'b1 ;
+        }
+    } else {
+        x1_BaudCounter := 4'b0 ;
+    }
+
+    if ( x16_ShiftTiming && x1_BaudCounter == 4'd7 ) {
+        x1_ShiftTiming := TRUE ;                            // Assert Shift Timing indicator.
+    } else {
+        x1_ShiftTiming := FALSE ;                           // Reset Shift Timing indicator.
+    }
+
+/* ************************************************************ */
+/* Bit length check */
+    any {
+        ~Rx_ParityEN_i  : any {                 // without Parity enable
+            Rx_BitLength_i == 2'b00 : BitLength = 4'd6 ;
+                                                //    5bit data length ( Data[4:0] + End )
+            Rx_BitLength_i == 2'b01 : BitLength = 4'd7 ;
+                                                //    6bit data length ( Data[5:0] + End )
+            Rx_BitLength_i == 2'b10 : BitLength = 4'd8 ;
+                                                //    7bit data length ( Data[6:0] + End )
+            else                    : BitLength = 4'd9 ;
+                                                //    8bit data length ( Data[7:0] + End )
+        }
+        else             : any {                // with Parity enable
+            Rx_BitLength_i == 2'b00 : BitLength = 4'd7 ;
+                                                //    5bit data length ( Data[4:0] + Parity + End )
+            Rx_BitLength_i == 2'b01 : BitLength = 4'd8 ;
+                                                //    6bit data length ( Data[5:0] + Parity + End )
+            Rx_BitLength_i == 2'b10 : BitLength = 4'd9 ;
+                                                //    7bit data length ( Data[6:0] + Parity + End )
+            else                    : BitLength = 4'd10;
+                                                //    8bit data length ( Data[7:0] + Parity + End )
+        }
+    }
+
+/* ************************************************************ */
+/* Parity generation */
+    any {
+        Rx_OddParity_i  : Rx_Parity = ~^(Rx_Data) ;         // Calculate ODD parity
+        else            : Rx_Parity =  ^(Rx_Data) ;         // Calculate EVEN parity
+    }
+
+/* ************************************************************ */
+/* Equation for operation status */
+    Rx_operation_o  = Detect_StartBit ;
+    Rx_ShiftClock_o = x1_ShiftTiming ;
+
+/* ************************************************************ */
+/* Equation for Transmit data output */
+    any {
+        ~Rx_ParityEN_i  : any {                         // without Parity enable
+            Rx_BitLength_i == 2'b00 :   Rx_Data = { 3#1'b1 , Rx_ShiftReg[10:6] } ;
+                                                        // output internal shift register value.
+            Rx_BitLength_i == 2'b01 :   Rx_Data = { 2#1'b1 , Rx_ShiftReg[10:5] } ;
+                                                        // output internal shift register value.
+            Rx_BitLength_i == 2'b10 :   Rx_Data = {   1'b1 , Rx_ShiftReg[10:4] } ;
+                                                        // output internal shift register value.
+            else :                      Rx_Data =            Rx_ShiftReg[10:3]   ;
+                                                        // output internal shift register value.
+        }
+        else            : any {                         // with Parity enable
+            Rx_BitLength_i == 2'b00 :   Rx_Data = { 3#1'b1 , Rx_ShiftReg[ 9:5] } ;
+                                                        // output internal shift register value.
+            Rx_BitLength_i == 2'b01 :   Rx_Data = { 2#1'b1 , Rx_ShiftReg[ 9:4] } ;
+                                                        // output internal shift register value.
+            Rx_BitLength_i == 2'b10 :   Rx_Data = {   1'b1 , Rx_ShiftReg[ 9:3] } ;
+                                                        // output internal shift register value.
+            else :                      Rx_Data =            Rx_ShiftReg[ 9:2]   ;
+                                                        // output internal shift register value.
+        }
+    }
+
+}   // end of equation
+
+/* ************************************************************ */
+// Procedure description
+    function    Receive_Start       shift_Operation() ;
+
+/* ************************************************************ */
+/* Receiver operation */
+    proc    shift_Operation {
+        
+        if ( x16_ShiftTiming ) {
+        // Data capture to shift register
+            
+                                                        // Capture synchronized RxD.
+
+        // Check bit length counter value
+            //ShiftCount := ShiftCount + 4'b1 ;           // Shift counter + 1
+            if ( ShiftCount == 4'd8 ) {
+                data_check() ;
+                ShiftCount:=0b1111;
+            }else{
+                ShiftCount := ShiftCount + 4'b1 ; 
+                Rx_ShiftReg := { RxD_i , Rx_ShiftReg[11:1] } ;
+            }
+        }
+    }
+
+    proc    data_check {                                // Parity check
+        if ( Rx_ParityEN_i && ( Rx_ShiftReg[10] != Rx_Parity ) ) {
+                                                        // Check parity bit in the Bit<10>
+        // Assert status flag.
+            RxD_ParityError_o() ;                       // Assert ERROR flag.
+        } else {
+            if ( Rx_ShiftReg[11] == FALSE ) {           // Check stop bit as "1" in the Bit<11>
+            // Assert status flag.
+                RxD_FramingError_o() ;                  // Assert ERROR flag.
+            } else {
+            // Assert status flag.
+               // Rx_Data_o  =Rx_ShiftReg[ 9:2] ;
+               Rx_Data_o  = Rx_Data;   
+                                // No error and data output
+                RxD_Ready_o() ;                         // Assert RECEIVER-READY flag
+            }
+        }
+        access_complete() ;
+    }
+      
+    proc    access_complete {
+    // Finish operation
+        Detect_StartBit := FALSE ;
+        Rx_ShiftReg     := 12'h0 ;
+        ShiftCount      := 4'b0 ;
+
+    // Procedure finish.
+        finish ;
+    }
+
+/* ************************************************************ */
+}   // end of module
